@@ -1,6 +1,6 @@
-import json
-from datetime import datetime
 from dateutil.tz import tzlocal, tzutc
+from datetime import datetime
+import json
 
 
 def is_naive(dt):
@@ -28,6 +28,7 @@ def guess_timezone(dt):
             return dt.replace(tzinfo=tzutc())
 
     return dt
+
 
 class DatetimeSerializer(json.JSONEncoder):
     def default(self, obj):

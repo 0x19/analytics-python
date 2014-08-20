@@ -1,18 +1,17 @@
-import collections
 from datetime import datetime, timedelta
-import json
+import collections
+import threading
 import logging
 import numbers
-import threading
+import json
 
 from dateutil.tz import tzutc
 import requests
 
-from stats import Statistics
-from errors import ApiError
-from utils import guess_timezone, DatetimeSerializer
-
-import options
+from analytics.utils import guess_timezone, DatetimeSerializer
+from anaytics.stats import Statistics
+from analytics.errors import ApiError
+import analytics.options
 
 
 logging_enabled = True
@@ -104,13 +103,12 @@ class Client(object):
 
     """
 
-    def __init__(self, secret=None, log_level=logging.INFO, log=True,
-                 flush_at=20, flush_after=timedelta(0, 10),
-                 async=True, max_queue_size=10000, stats=Statistics(),
-                 timeout=10, send=True):
+    def __init__(self, write_key=None, debug=False, flush_at=20,
+                 max_queue_size=10000, stats=Statistics(),
+                 timeout=10, send=True, retries=3):
         """Create a new instance of a analytics-python Client
 
-        :param str secret: The Segment.io API secret
+        :param str write_key: The Segment.io API secret
         :param logging.LOG_LEVEL log_level: The logging log level for the
         client talks to. Use log_level=logging.DEBUG to troubleshoot
         : param bool log: False to turn off logging completely, True by default
@@ -128,36 +126,15 @@ class Client(object):
         turn analytics off (for testing).
         """
 
-        self.secret = secret
-
+        self.write_key = write_key
         self.queue = collections.deque()
-        self.last_flushed = None
-
-        if not log:
-            # TODO: logging_enabled is assigned, but not used
-            logging_enabled = False
-            # effectively disables the logger
-            logger.setLevel(logging.CRITICAL)
-        else:
-            logger.setLevel(log_level)
-
-        self.async = async
-
         self.max_queue_size = max_queue_size
         self.max_flush_size = 50
-
-        self.flush_at = flush_at
-        self.flush_after = flush_after
-
         self.timeout = timeout
-
         self.stats = stats
-
         self.flush_lock = threading.Lock()
         self.flushing_thread = None
-
         self.send = send
-
         self.success_callbacks = []
         self.failure_callbacks = []
 
@@ -169,8 +146,8 @@ class Client(object):
         """
         logger.setLevel(level)
 
-    def _check_for_secret(self):
-        if not self.secret:
+    def _check_write_key(self):
+        if not self.write_key:
             raise Exception('Please set analytics.secret before calling ' +
                             'identify or track.')
 
@@ -391,8 +368,7 @@ class Client(object):
 
         return full or stale
 
-    def _enqueue(self, action):
-
+    def _enqueue(self, msg):
         # if we've disabled sending, just return False
         if not self.send:
             return False
