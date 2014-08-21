@@ -1,6 +1,9 @@
 from dateutil.tz import tzlocal, tzutc
 from datetime import datetime
+import numbers
 import json
+
+import six
 
 
 def is_naive(dt):
@@ -28,6 +31,41 @@ def guess_timezone(dt):
             return dt.replace(tzinfo=tzutc())
 
     return dt
+
+def clean(self, item):
+    if isinstance(item, (str, six.text_type, int, six.integer_types, float,
+                         bool, numbers.Number, datetime)):
+        return item
+    elif isinstance(item, (set, list, tuple)):
+        return _clean_list(item)
+    elif isinstance(item, dict):
+        return _clean_dict(item)
+    else:
+        return _coerce_unicode(item)
+
+def _clean_list(self, l):
+    return [clean(item) for item in l]
+
+def _clean_dict(self, d):
+    data = {}
+    for k, v in six.iteritems(d):
+        try:
+            data[k] = clean(v)
+        except TypeError:
+            log('warning', 'Dictionary values must be serializeable to ' +
+                        'JSON "%s" value %s of type %s is unsupported.'
+                        % (k, v, type(v)))
+    return data
+
+def _coerce_unicode(self, cmplx):
+    try:
+        item = cmplx.decode("utf-8", "strict")
+    except AttributeError as exception:
+        item = ":".join(exception)
+        item.decode("utf-8", "strict")
+    except:
+        raise
+    return item
 
 
 class DatetimeSerializer(json.JSONEncoder):

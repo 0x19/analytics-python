@@ -8,10 +8,16 @@ import json
 from dateutil.tz import tzutc
 import requests
 
-from analytics.utils import guess_timezone, DatetimeSerializer
-from anaytics.stats import Statistics
+from analytics.stats import Statistics
 from analytics.errors import ApiError
-import analytics.options
+from analytics.consumer import Consumer
+from analytics.utils import guess_timezone, DatetimeSerializer
+
+
+try:
+    import queue
+except:
+    import Queue as queue
 
 
 logging_enabled = True
@@ -25,7 +31,7 @@ def log(level, *args, **kwargs):
 
 
 def package_exception(client, data, e):
-    log('warn', 'Segment.io request error', exc_info=True)
+    log('warning', 'Segment.io request error', exc_info=True)
     client._on_failed_flush(data, e)
 
 
@@ -83,19 +89,6 @@ def request(client, url, data):
     return False
 
 
-class FlushThread(threading.Thread):
-
-    def __init__(self, client):
-        threading.Thread.__init__(self)
-        self.client = client
-
-    def run(self):
-        log('debug', 'Flushing thread running ...')
-
-        self.client._sync_flush()
-
-        log('debug', 'Flushing thread done.')
-
 
 class Client(object):
     """The Client class is a batching asynchronous python wrapper over the
@@ -126,76 +119,21 @@ class Client(object):
         turn analytics off (for testing).
         """
 
+        self.queue = queue.Queue(max_queue_size)
+        self.consumer = Consumer(self)
         self.write_key = write_key
-        self.queue = collections.deque()
-        self.max_queue_size = max_queue_size
-        self.max_flush_size = 50
         self.timeout = timeout
         self.stats = stats
-        self.flush_lock = threading.Lock()
-        self.flushing_thread = None
         self.send = send
-        self.success_callbacks = []
-        self.failure_callbacks = []
-
-    def set_log_level(self, level):
-        """Sets the log level for analytics-python
-
-        :param logging.LOG_LEVEL level: The level at which analytics-python log
-        should talk at
-        """
-        logger.setLevel(level)
+        self.debug = debug
 
     def _check_write_key(self):
         if not self.write_key:
             raise Exception('Please set analytics.secret before calling ' +
                             'identify or track.')
 
-    def _coerce_unicode(self, cmplx):
-        return unicode(cmplx)
-
-    def _clean_list(self, l):
-        return [self._clean(item) for item in l]
-
-    def _clean_dict(self, d):
-        data = {}
-        for k, v in d.iteritems():
-            try:
-                data[k] = self._clean(v)
-            except TypeError:
-                log('warn', 'Dictionary values must be serializeable to ' +
-                            'JSON "%s" value %s of type %s is unsupported.'
-                            % (k, v, type(v)))
-        return data
-
-    def _clean(self, item):
-        if isinstance(item, (str, unicode, int, long, float, bool,
-                             numbers.Number, datetime)):
-            return item
-        elif isinstance(item, (set, list, tuple)):
-            return self._clean_list(item)
-        elif isinstance(item, dict):
-            return self._clean_dict(item)
-        else:
-            return self._coerce_unicode(item)
-
-    def on_success(self, callback):
-        """
-        Assign a callback to fire after a successful flush
-
-        :param func callback: A callback that will be fired on a flush success
-        """
-        self.success_callbacks.append(callback)
-
-    def on_failure(self, callback):
-        """
-        Assign a callback to fire after a failed flush
-
-        :param func callback: A callback that will be fired on a failed flush
-        """
-        self.failure_callbacks.append(callback)
-
-    def identify(self, user_id=None, traits={}, context={}, timestamp=None):
+    def identify(self, user_id=None, traits={}, context={}, timestamp=None,
+                 session_id=None):
         """Identifying a user ties all of their actions to an id, and
         associates user traits to that id.
 
@@ -410,70 +348,12 @@ class Client(object):
         return self.flushing_thread is None \
             or not self.flushing_thread.is_alive()
 
-    def flush(self, async=None):
-        """ Forces a flush from the internal queue to the server
+    def flush(self):
+        """ Forces a flush from the internal queue to the server"""
+        queue = self.queue
 
-        :param bool async: True to block until all messages have been flushed
-        """
-
-        flushing = False
-
-        # if the async arg is provided, it overrides the client's settings
-        if async is None:
-            async = self.async
-
-        if async:
-            # We should asynchronously flush on another thread
-            with self.flush_lock:
-
-                if self._flush_thread_is_free():
-
-                    log('debug', 'Initiating asynchronous flush ..')
-
-                    self.flushing_thread = FlushThread(self)
-                    self.flushing_thread.start()
-
-                    flushing = True
-
-                else:
-                    log('debug', 'The flushing thread is still active.')
-        else:
-
-            # Flushes on this thread
-            log('debug', 'Initiating synchronous flush ..')
-            self._sync_flush()
-            flushing = True
-
-        if flushing:
-            self.last_flushed = datetime.now()
-            self.stats.flushes += 1
-
-        return flushing
-
-    def _sync_flush(self):
-
-        log('debug', 'Starting flush ..')
-
-        successful = 0
-        failed = 0
-
-        url = options.host + options.endpoints['batch']
-
-        while len(self.queue) > 0:
-
-            batch = []
-            for i in range(self.max_flush_size):
-                if len(self.queue) == 0:
-                    break
-
-                batch.append(self.queue.pop())
-
-            payload = {'batch': batch, 'secret': self.secret}
-
-            if request(self, url, payload):
-                successful += len(batch)
-            else:
-                failed += len(batch)
+        size = queue.qsize()
+        queue.join()
 
         log('debug', 'Successfully flushed {0} items [{1} failed].'.
                      format(str(successful), str(failed)))
