@@ -5,6 +5,11 @@ import json
 
 import six
 
+try:
+    import queue
+except:
+    import Queue as queue
+
 
 def is_naive(dt):
     """ Determines if a given datetime.datetime is naive. """

@@ -65,31 +65,6 @@ def package_response(client, data, response):
                                 ApiError(response.status_code, response.text))
 
 
-def request(client, url, data):
-
-    log('debug', 'Sending request to Segment.io ...')
-    try:
-
-        response = requests.post(url,
-                                 data=json.dumps(data, cls=DatetimeSerializer),
-                                 headers={'content-type': 'application/json'},
-                                 timeout=client.timeout)
-
-        log('debug', 'Finished Segment.io request.')
-
-        package_response(client, data, response)
-
-        return response.status_code == 200
-
-    except requests.ConnectionError as e:
-        package_exception(client, data, e)
-    except requests.Timeout as e:
-        package_exception(client, data, e)
-
-    return False
-
-
-
 class Client(object):
     """The Client class is a batching asynchronous python wrapper over the
     Segment.io API.
@@ -119,13 +94,13 @@ class Client(object):
         turn analytics off (for testing).
         """
 
+        self.consumer = Consumer(self.queue, write_key)
         self.queue = queue.Queue(max_queue_size)
-        self.consumer = Consumer(self)
         self.write_key = write_key
         self.timeout = timeout
+        self.debug = debug
         self.stats = stats
         self.send = send
-        self.debug = debug
 
     def _check_write_key(self):
         if not self.write_key:
@@ -311,24 +286,14 @@ class Client(object):
         if not self.send:
             return False
 
-        submitted = False
-
-        if len(self.queue) < self.max_queue_size:
-            self.queue.append(action)
-
-            self.stats.submitted += 1
-
-            submitted = True
-
-            log('debug', 'Enqueued ' + action['action'] + '.')
-
-        else:
+        if self.queue.full():
             log('warn', 'analytics-python queue is full')
+            return False
 
-        if self._should_flush():
-            self.flush()
-
-        return submitted
+        self.queue.put(action)
+        self.stats.submitted += 1
+        log('debug', 'Enqueued ' + msg['type'] + '.')
+        return True
 
     def _on_successful_flush(self, data, response):
         if 'batch' in data:
@@ -351,9 +316,7 @@ class Client(object):
     def flush(self):
         """ Forces a flush from the internal queue to the server"""
         queue = self.queue
-
         size = queue.qsize()
         queue.join()
-
         log('debug', 'Successfully flushed {0} items [{1} failed].'.
                      format(str(successful), str(failed)))
