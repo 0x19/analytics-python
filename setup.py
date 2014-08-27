@@ -29,7 +29,7 @@ setup(
     author_email='ilya@segment.io',
     maintainer='Segment.io',
     maintainer_email='friends@segment.io',
-    packages=['analytics'],
+    packages=['segmentio'],
     license='MIT License',
     install_requires=[
         'requests',
